@@ -1,8 +1,8 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { PDFDocument } from "pdf-lib";
-import { Download, Eye, FileText, Image as ImageIcon, Loader2, RotateCcw, Settings2, Trash2, Upload, Wand2 } from "lucide-react";
+import { Download, Eye, FileText, Image as ImageIcon, Loader2, LockKeyhole, RotateCcw, Settings2, Trash2, Upload, Wand2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -94,16 +94,55 @@ export default function Home() {
   const [exportProgress, setExportProgress] = useState({ total: 0, done: 0, current: "" });
   const [status, setStatus] = useState("Pronto para renderizar.");
   const [batchMode, setBatchMode] = useState<"all" | "selected">("all");
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [accessPassword, setAccessPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   const selected = useMemo(() => jobs.find((job) => job.id === selectedId) || jobs[0], [jobs, selectedId]);
   const totalKb = useMemo(() => jobs.reduce((sum, job) => sum + job.sizeKb, 0), [jobs]);
   const progressPercent = exportProgress.total ? Math.round((exportProgress.done / exportProgress.total) * 100) : 0;
 
   useEffect(() => {
+    window.setTimeout(() => {
+      setIsUnlocked(sessionStorage.getItem("zpl-etiqueta-auth") === "ok");
+      setAuthChecked(true);
+    }, 0);
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthError("");
+    setIsAuthenticating(true);
+
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: accessPassword }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({ error: "Senha invalida." }));
+        throw new Error(payload.error || "Senha invalida.");
+      }
+
+      sessionStorage.setItem("zpl-etiqueta-auth", "ok");
+      setIsUnlocked(true);
+      setAccessPassword("");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Nao foi possivel validar a senha.");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
 
   async function handleFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []);
@@ -242,6 +281,46 @@ export default function Home() {
     setSelectedId(parsed[0]?.id || "");
     setPreviewUrl("");
     setStatus("Exemplo restaurado.");
+  }
+
+  if (!authChecked) {
+    return <main className="min-h-screen bg-background" />;
+  }
+
+  if (!isUnlocked) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <div className="mb-2 flex size-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <LockKeyhole className="size-5" />
+            </div>
+            <CardTitle>Acesso restrito</CardTitle>
+            <CardDescription>Informe a senha configurada no servidor para usar o gerador de etiquetas.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-4" onSubmit={handleLogin}>
+              <div className="space-y-2">
+                <Label htmlFor="access-password">Senha</Label>
+                <Input
+                  id="access-password"
+                  type="password"
+                  autoFocus
+                  value={accessPassword}
+                  onChange={(event) => setAccessPassword(event.target.value)}
+                  placeholder="Digite a senha de acesso"
+                />
+              </div>
+              {authError && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{authError}</div>}
+              <Button className="w-full" type="submit" disabled={!accessPassword || isAuthenticating}>
+                {isAuthenticating ? <Loader2 className="animate-spin" /> : <LockKeyhole />}
+                Entrar
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </main>
+    );
   }
 
   return (
@@ -428,6 +507,9 @@ export default function Home() {
     </main>
   );
 }
+
+
+
 
 
 
