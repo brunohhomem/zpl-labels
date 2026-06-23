@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PDFDocument } from "pdf-lib";
 import { ChevronLeft, ChevronRight, Download, Eye, FileText, Image as ImageIcon, Loader2, LockKeyhole, RotateCcw, Settings2, Trash2, Upload, Wand2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -130,6 +130,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [previewItems, setPreviewItems] = useState<PreviewItem[]>([]);
+  const previewItemsRef = useRef<PreviewItem[]>([]);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -157,9 +158,21 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
-      previewItems.forEach((item) => URL.revokeObjectURL(item.url));
+      previewItemsRef.current.forEach((item) => URL.revokeObjectURL(item.url));
     };
-  }, [previewItems]);
+  }, []);
+
+  function updatePreviewItems(items: PreviewItem[]) {
+    previewItemsRef.current = items;
+    setPreviewItems(items);
+  }
+
+  function clearPreviewItems() {
+    previewItemsRef.current.forEach((item) => URL.revokeObjectURL(item.url));
+    previewItemsRef.current = [];
+    setPreviewItems([]);
+    setPreviewIndex(0);
+  }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -219,8 +232,7 @@ export default function Home() {
 
     setSelectedId(targetFile.id);
     setIsRendering(true);
-    setPreviewItems([]);
-    setPreviewIndex(0);
+    clearPreviewItems();
     setStatus(`Renderizando 0 de ${previewJobs.length} preview(s)...`);
 
     try {
@@ -237,7 +249,7 @@ export default function Home() {
         const blob = await response.blob();
         const nextItem = { name: previewJob.name, url: URL.createObjectURL(blob) };
         renderedItems.push(nextItem);
-        setPreviewItems([...renderedItems]);
+        updatePreviewItems([...renderedItems]);
         setPreviewIndex(0);
 
         if (index + 1 < previewJobs.length) await sleep(REQUEST_DELAY_MS);
@@ -245,9 +257,7 @@ export default function Home() {
 
       setStatus(`Preview atualizado: ${previewJobs.length} etiqueta(s) de ${targetFile.name}.`);
     } catch (error) {
-      renderedItems.forEach((item) => URL.revokeObjectURL(item.url));
-      setPreviewItems([]);
-    setPreviewIndex(0);
+      clearPreviewItems();
       setStatus(error instanceof Error ? error.message : "Nao foi possivel renderizar o arquivo.");
     } finally {
       setIsRendering(false);
@@ -259,8 +269,7 @@ export default function Home() {
     setJobs(next);
     if (selectedId === fileId) {
       setSelectedId(next[0]?.id || "");
-      setPreviewItems([]);
-    setPreviewIndex(0);
+      clearPreviewItems();
     }
     setStatus(next.length ? `${next.length} arquivo(s) na lista.` : "Lista de arquivos vazia.");
   }
@@ -342,8 +351,7 @@ export default function Home() {
     const parsed = parseZplFile(demoZpl, "demo.zpl");
     setJobs(parsed);
     setSelectedId(parsed[0]?.id || "");
-    setPreviewItems([]);
-    setPreviewIndex(0);
+    clearPreviewItems();
     setStatus("Exemplo restaurado.");
   }
 
@@ -597,6 +605,9 @@ export default function Home() {
     </main>
   );
 }
+
+
+
 
 
 
