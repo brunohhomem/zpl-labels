@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { PDFDocument } from "pdf-lib";
-import { Download, Eye, FileText, Image as ImageIcon, Loader2, LockKeyhole, RotateCcw, Settings2, Trash2, Upload, Wand2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Eye, FileText, Image as ImageIcon, Loader2, LockKeyhole, RotateCcw, Settings2, Trash2, Upload, Wand2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +29,11 @@ type Settings = {
   unit: "in";
   apiHost: string;
   apiKey: string;
+};
+
+type PreviewItem = {
+  name: string;
+  url: string;
 };
 
 const demoZpl = `^XA
@@ -67,6 +72,42 @@ function parseZplFile(raw: string, fileName: string): ZplFile[] {
   }];
 }
 
+type ExportQueueItem = {
+  name: string;
+  zpl: string;
+};
+
+function splitPrintableZpl(file: ZplFile): ExportQueueItem[] {
+  const content = file.zpl.trim();
+  const blockPattern = /\^XA[\s\S]*?\^XZ/g;
+  const matches = Array.from(content.matchAll(blockPattern));
+
+  if (!matches.length) return [{ name: file.name, zpl: content }];
+
+  const firstStart = matches[0].index ?? 0;
+  const globalPrefix = content.slice(0, firstStart).trim();
+  let previousEnd = 0;
+  let printableIndex = 0;
+  const items: ExportQueueItem[] = [];
+
+  for (const match of matches) {
+    const block = match[0].trim();
+    const start = match.index ?? 0;
+    const prefix = content.slice(previousEnd, start).trim() || globalPrefix;
+    previousEnd = start + match[0].length;
+
+    if (/^\^XA\s*\^ID/i.test(block) || block.includes("^IDR:")) continue;
+
+    printableIndex += 1;
+    items.push({
+      name: matches.length > 1 ? `${file.name} - etiqueta ${printableIndex}` : file.name,
+      zpl: [prefix, block].filter(Boolean).join("\n"),
+    });
+  }
+
+  return items.length ? items : [{ name: file.name, zpl: content }];
+}
+
 function formatError(status: number, message: string) {
   if (message.includes("exceeds the maximum allowed") || message.includes("2 MB")) {
     return "O Labelary recusou a requisicao porque imagens/fontes embutidas passaram de 2 MB. Remova arquivos da lista ou exporte um arquivo por vez.";
@@ -88,7 +129,8 @@ export default function Home() {
   const [jobs, setJobs] = useState<ZplFile[]>(() => parseZplFile(demoZpl, "demo.zpl"));
   const [selectedId, setSelectedId] = useState<string>("");
   const [settings, setSettings] = useState<Settings>(defaultSettings);
-  const [previewUrl, setPreviewUrl] = useState<string>("");
+  const [previewItems, setPreviewItems] = useState<PreviewItem[]>([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const [isRendering, setIsRendering] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ total: 0, done: 0, current: "" });
@@ -102,7 +144,9 @@ export default function Home() {
 
   const selected = useMemo(() => jobs.find((job) => job.id === selectedId) || jobs[0], [jobs, selectedId]);
   const totalKb = useMemo(() => jobs.reduce((sum, job) => sum + job.sizeKb, 0), [jobs]);
+  const totalLabels = useMemo(() => jobs.reduce((sum, job) => sum + splitPrintableZpl(job).length, 0), [jobs]);
   const progressPercent = exportProgress.total ? Math.round((exportProgress.done / exportProgress.total) * 100) : 0;
+  const activePreview = previewItems[previewIndex];
 
   useEffect(() => {
     window.setTimeout(() => {
@@ -113,9 +157,9 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewItems.forEach((item) => URL.revokeObjectURL(item.url));
     };
-  }, [previewUrl]);
+  }, [previewItems]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -170,22 +214,40 @@ export default function Home() {
 
   async function renderPreview(targetFile = selected) {
     if (!targetFile) return;
+    const previewJobs = splitPrintableZpl(targetFile);
+    const renderedItems: PreviewItem[] = [];
+
     setSelectedId(targetFile.id);
     setIsRendering(true);
-    setStatus("Renderizando PNG no Labelary...");
+    setPreviewItems([]);
+    setPreviewIndex(0);
+    setStatus(`Renderizando 0 de ${previewJobs.length} preview(s)...`);
+
     try {
-      const response = await fetch("/api/render", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...settings, zpl: targetFile.zpl, index: 0 }),
-      });
-      if (!response.ok) throw new Error(formatError(response.status, await response.text()));
-      const blob = await response.blob();
-      const nextUrl = URL.createObjectURL(blob);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(nextUrl);
-      setStatus(`Preview atualizado: ${targetFile.name}.`);
+      for (const [index, previewJob] of previewJobs.entries()) {
+        setStatus(`Renderizando preview ${index + 1} de ${previewJobs.length}: ${previewJob.name}`);
+        const response = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...settings, zpl: previewJob.zpl, index: 0 }),
+        });
+
+        if (!response.ok) throw new Error(`${previewJob.name}: ${formatError(response.status, await response.text())}`);
+
+        const blob = await response.blob();
+        const nextItem = { name: previewJob.name, url: URL.createObjectURL(blob) };
+        renderedItems.push(nextItem);
+        setPreviewItems([...renderedItems]);
+        setPreviewIndex(0);
+
+        if (index + 1 < previewJobs.length) await sleep(REQUEST_DELAY_MS);
+      }
+
+      setStatus(`Preview atualizado: ${previewJobs.length} etiqueta(s) de ${targetFile.name}.`);
     } catch (error) {
+      renderedItems.forEach((item) => URL.revokeObjectURL(item.url));
+      setPreviewItems([]);
+    setPreviewIndex(0);
       setStatus(error instanceof Error ? error.message : "Nao foi possivel renderizar o arquivo.");
     } finally {
       setIsRendering(false);
@@ -197,13 +259,13 @@ export default function Home() {
     setJobs(next);
     if (selectedId === fileId) {
       setSelectedId(next[0]?.id || "");
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setPreviewUrl("");
+      setPreviewItems([]);
+    setPreviewIndex(0);
     }
     setStatus(next.length ? `${next.length} arquivo(s) na lista.` : "Lista de arquivos vazia.");
   }
 
-  async function convertFileToPdf(job: ZplFile, queuePosition: number, total: number) {
+  async function convertFileToPdf(job: ExportQueueItem, queuePosition: number, total: number) {
     for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
       const response = await fetch("/api/export", {
         method: "POST",
@@ -228,12 +290,13 @@ export default function Home() {
   }
 
   async function exportPdf() {
-    const exportJobs = batchMode === "all" ? jobs : selected ? [selected] : [];
+    const exportFiles = batchMode === "all" ? jobs : selected ? [selected] : [];
+    const exportJobs = exportFiles.flatMap(splitPrintableZpl);
     if (!exportJobs.length) return;
 
     setIsExporting(true);
     setExportProgress({ total: exportJobs.length, done: 0, current: exportJobs[0]?.name || "" });
-    setStatus(`Fila iniciada: 0 de ${exportJobs.length} arquivo(s) convertidos.`);
+    setStatus(`Fila iniciada: 0 de ${exportJobs.length} etiqueta(s) convertida(s) a partir de ${exportFiles.length} arquivo(s).`);
 
     try {
       const mergedPdf = await PDFDocument.create();
@@ -241,7 +304,7 @@ export default function Home() {
       for (const [index, job] of exportJobs.entries()) {
         const queuePosition = index + 1;
         setExportProgress({ total: exportJobs.length, done: index, current: job.name });
-        setStatus(`Convertendo ${queuePosition} de ${exportJobs.length}: ${job.name}`);
+        setStatus(`Convertendo etiqueta ${queuePosition} de ${exportJobs.length}: ${job.name}`);
 
         const pdfBytes = await convertFileToPdf(job, queuePosition, exportJobs.length);
         const sourcePdf = await PDFDocument.load(pdfBytes);
@@ -250,7 +313,7 @@ export default function Home() {
         setExportProgress({ total: exportJobs.length, done: queuePosition, current: job.name });
 
         if (queuePosition < exportJobs.length) {
-          setStatus(`Convertido ${queuePosition} de ${exportJobs.length}. Aguardando ${REQUEST_DELAY_MS}ms antes do proximo envio.`);
+          setStatus(`Convertida ${queuePosition} de ${exportJobs.length}. Aguardando ${REQUEST_DELAY_MS}ms antes do proximo envio.`);
           await sleep(REQUEST_DELAY_MS);
         }
       }
@@ -267,7 +330,7 @@ export default function Home() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setStatus(`PDF final gerado: ${exportJobs.length} arquivo(s) convertidos e unidos.`);
+      setStatus(`PDF final gerado: ${exportJobs.length} etiqueta(s) convertida(s) e unida(s).`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Nao foi possivel exportar o PDF.");
     } finally {
@@ -279,7 +342,8 @@ export default function Home() {
     const parsed = parseZplFile(demoZpl, "demo.zpl");
     setJobs(parsed);
     setSelectedId(parsed[0]?.id || "");
-    setPreviewUrl("");
+    setPreviewItems([]);
+    setPreviewIndex(0);
     setStatus("Exemplo restaurado.");
   }
 
@@ -400,22 +464,47 @@ export default function Home() {
 
         <section className="space-y-4">
           <Card className="overflow-hidden">
-            <CardHeader className="flex-row items-center justify-between space-y-0">
-              <div>
+            <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
+              <div className="min-w-0">
                 <CardTitle>Preview</CardTitle>
-                <CardDescription>{selected?.name || "Nenhum arquivo selecionado"}</CardDescription>
+                <CardDescription className="truncate">
+                  {activePreview ? `Etiqueta ${previewIndex + 1} de ${previewItems.length} - ${activePreview.name}` : selected?.name || "Nenhum arquivo selecionado"}
+                </CardDescription>
               </div>
-              <Button onClick={() => renderPreview()} disabled={!selected || isRendering}>{isRendering ? <Loader2 className="animate-spin" /> : <Wand2 />} Redraw</Button>
+              <div className="flex items-center gap-2">
+                {previewItems.length > 0 && (
+                  <div className="flex items-center gap-1 rounded-md border bg-muted/40 p-1">
+                    <Button variant="ghost" size="icon" onClick={() => setPreviewIndex((current) => Math.max(0, current - 1))} disabled={previewIndex === 0 || isRendering} aria-label="Preview anterior">
+                      <ChevronLeft />
+                    </Button>
+                    <span className="min-w-16 px-2 text-center text-sm font-medium">{previewIndex + 1}/{previewItems.length}</span>
+                    <Button variant="ghost" size="icon" onClick={() => setPreviewIndex((current) => Math.min(previewItems.length - 1, current + 1))} disabled={previewIndex >= previewItems.length - 1 || isRendering} aria-label="Proximo preview">
+                      <ChevronRight />
+                    </Button>
+                  </div>
+                )}
+                <Button onClick={() => renderPreview()} disabled={!selected || isRendering}>{isRendering ? <Loader2 className="animate-spin" /> : <Wand2 />} Redraw</Button>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="flex min-h-[560px] items-center justify-center rounded-md border bg-white p-4">
-                {previewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={previewUrl} alt="Preview do arquivo ZPL" className="max-h-[720px] w-auto max-w-full object-contain shadow-sm" />
+              <div className="min-h-[560px] rounded-md border bg-white p-4">
+                {activePreview ? (
+                  <div className="space-y-4">
+                    <div className="rounded-md border bg-muted/40 p-2 text-center">
+                      <p className="truncate text-sm font-medium">{activePreview.name}</p>
+                      <p className="text-xs text-muted-foreground">Etiqueta {previewIndex + 1} de {previewItems.length}</p>
+                    </div>
+                    <figure className="rounded-md border bg-white p-3 shadow-sm">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={activePreview.url} alt={`Preview ${previewIndex + 1} de ${activePreview.name}`} className="mx-auto max-h-[720px] w-auto max-w-full object-contain" />
+                    </figure>
+                  </div>
                 ) : (
-                  <div className="max-w-sm text-center text-sm text-muted-foreground">
-                    <ImageIcon className="mx-auto mb-3 size-10" />
-                    Gere um preview para ver o ZPL renderizado como no Labelary.
+                  <div className="flex min-h-[520px] items-center justify-center">
+                    <div className="max-w-sm text-center text-sm text-muted-foreground">
+                      <ImageIcon className="mx-auto mb-3 size-10" />
+                      Gere um preview para ver todas as etiquetas internas do ZPL renderizadas como no Labelary.
+                    </div>
                   </div>
                 )}
               </div>
@@ -485,7 +574,7 @@ export default function Home() {
                 <div className="h-2 overflow-hidden rounded-full bg-background">
                   <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${isExporting ? progressPercent : 0}%` }} />
                 </div>
-                <p className="truncate text-xs text-muted-foreground">{isExporting && exportProgress.current ? `Atual: ${exportProgress.current}` : "Os arquivos serao enviados um por vez, com pausa e retry automatico em limite da API."}</p>
+                <p className="truncate text-xs text-muted-foreground">{isExporting && exportProgress.current ? `Atual: ${exportProgress.current}` : "As etiquetas internas serao enviadas uma por vez, com pausa e retry automatico em limite da API."}</p>
               </div>
               <div className="rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">{status}</div>
             </CardContent>
@@ -497,6 +586,7 @@ export default function Home() {
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Arquivos</p><p className="text-xl font-semibold">{jobs.length}</p></div>
+              <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Etiquetas</p><p className="text-xl font-semibold">{totalLabels}</p></div>
               <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Tamanho</p><p className="text-xl font-semibold">{totalKb} KB</p></div>
               <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Densidade</p><p className="text-xl font-semibold">{settings.density}</p></div>
               <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Etiqueta</p><p className="text-xl font-semibold">{settings.width}x{settings.height}</p></div>
@@ -507,6 +597,18 @@ export default function Home() {
     </main>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
