@@ -4,15 +4,46 @@ function roundDimension(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function dimensionsFromDots(widthDots: number, heightDots: number, density: string) {
+  const dotsPerInch = Number(density) * 25.4;
+  if (!Number.isFinite(dotsPerInch) || dotsPerInch <= 0 || widthDots <= 0 || heightDots <= 0) {
+    return null;
+  }
+
+  return {
+    width: roundDimension(widthDots / dotsPerInch),
+    height: roundDimension(heightDots / dotsPerInch),
+  };
+}
+
+function getFullPageGraphicDimensions(zpl: string, density: string) {
+  const downloadedGraphic = zpl.match(/~DG[^,]*,(\d+),(\d+),/i);
+  if (downloadedGraphic && /\^FO0\s*,\s*0\s*\^XG/i.test(zpl)) {
+    const totalBytes = Number(downloadedGraphic[1]);
+    const bytesPerRow = Number(downloadedGraphic[2]);
+    return dimensionsFromDots(bytesPerRow * 8, totalBytes / bytesPerRow, density);
+  }
+
+  const inlineGraphic = zpl.match(/\^FO0\s*,\s*0\s*\^GFA,(\d+),(\d+),(\d+),/i);
+  if (inlineGraphic) {
+    const graphicFieldBytes = Number(inlineGraphic[2]);
+    const bytesPerRow = Number(inlineGraphic[3]);
+    return dimensionsFromDots(bytesPerRow * 8, graphicFieldBytes / bytesPerRow, density);
+  }
+
+  return null;
+}
+
 function isDoubleLandscapeLabel(zpl: string) {
   const coordinates = Array.from(zpl.matchAll(/\^FO(\d+),(\d+)/gi));
-  if (!coordinates.length) return false;
+  if (coordinates.length < 4) return false;
 
   const hasLeftColumn = coordinates.some((match) => Number(match[1]) < 320);
   const hasRightColumn = coordinates.some((match) => Number(match[1]) >= 320);
+  const maxX = Math.max(...coordinates.map((match) => Number(match[1])));
   const maxY = Math.max(...coordinates.map((match) => Number(match[2])));
 
-  return hasLeftColumn && hasRightColumn && maxY <= 250;
+  return hasLeftColumn && hasRightColumn && maxX <= 640 && maxY <= 250;
 }
 
 function getContentOrientation(zpl: string) {
@@ -49,9 +80,12 @@ export function getLabelDimensions(
   const labelLength = zpl.match(/\^LL(\d+)/i);
 
   if (printWidth && labelLength) {
-    const dotsPerInch = Number(fallback.density) * 25.4;
-    const width = roundDimension(Number(printWidth[1]) / dotsPerInch);
-    const height = roundDimension(Number(labelLength[1]) / dotsPerInch);
+    const dimensions = dimensionsFromDots(Number(printWidth[1]), Number(labelLength[1]), fallback.density);
+    if (!dimensions) {
+      return getFallbackDimensions(zpl, fallback);
+    }
+
+    const { width, height } = dimensions;
     const orientation = width > height ? "paisagem" : "retrato";
 
     return { width, height, format: `${width} x ${height} in - ${orientation} (ZPL)`, orientation, detected: true };
@@ -61,18 +95,21 @@ export function getLabelDimensions(
     return { width: 3.15, height: 0.98, format: "80 x 25 mm - paisagem", orientation: "paisagem", detected: true };
   }
 
-  const graphicDefinition = zpl.match(/~DG[^,]*,(\d+),(\d+),/i);
-  if (graphicDefinition && /\^FO0,0\^XG/i.test(zpl)) {
-    const totalBytes = Number(graphicDefinition[1]);
-    const bytesPerRow = Number(graphicDefinition[2]);
-    const dotsPerInch = Number(fallback.density) * 25.4;
-    const width = roundDimension((bytesPerRow * 8) / dotsPerInch);
-    const height = roundDimension((totalBytes / bytesPerRow) / dotsPerInch);
+  const graphicDimensions = getFullPageGraphicDimensions(zpl, fallback.density);
+  if (graphicDimensions) {
+    const { width, height } = graphicDimensions;
     const orientation = width > height ? "paisagem" : "retrato";
 
     return { width, height, format: `${width} x ${height} in - ${orientation} (grafico ZPL)`, orientation, detected: true };
   }
 
+  return getFallbackDimensions(zpl, fallback);
+}
+
+function getFallbackDimensions(
+  zpl: string,
+  fallback: Pick<LabelSettings, "width" | "height" | "density">
+): LabelDimensions {
   const inferredOrientation = getContentOrientation(zpl);
   const shortSide = Math.min(fallback.width, fallback.height);
   const longSide = Math.max(fallback.width, fallback.height);
