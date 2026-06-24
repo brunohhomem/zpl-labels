@@ -3,6 +3,7 @@ import { getLabelDimensions, splitPrintableZpl } from "@/lib/zpl/parser";
 import type { LabelSettings, ZplFile } from "@/types/zpl";
 
 const settings: LabelSettings = {
+  autoDetect: true,
   density: "8",
   width: 4,
   height: 6,
@@ -12,6 +13,23 @@ const settings: LabelSettings = {
 };
 
 describe("getLabelDimensions", () => {
+  it("usa as dimensoes manuais quando a leitura automatica esta desligada", () => {
+    const dimensions = getLabelDimensions("^XA^PW640^LL200^XZ", {
+      ...settings,
+      autoDetect: false,
+      width: 2,
+      height: 3,
+    });
+
+    expect(dimensions).toEqual({
+      width: 2,
+      height: 3,
+      format: "2 x 3 in - retrato (manual)",
+      orientation: "retrato",
+      detected: false,
+    });
+  });
+
   it("prioriza dimensoes explicitas de uma etiqueta paisagem", () => {
     const dimensions = getLabelDimensions("^XA^PW640^LL200^XZ", settings);
 

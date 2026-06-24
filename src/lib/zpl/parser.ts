@@ -131,8 +131,19 @@ export function parseZplFile(raw: string, fileName: string): ZplFile[] {
 
 export function getLabelDimensions(
   zpl: string,
-  fallback: Pick<LabelSettings, "width" | "height" | "density">
+  fallback: Pick<LabelSettings, "autoDetect" | "width" | "height" | "density">
 ): LabelDimensions {
+  if (!fallback.autoDetect) {
+    const orientation = fallback.width > fallback.height ? "paisagem" : "retrato";
+    return {
+      width: fallback.width,
+      height: fallback.height,
+      format: `${fallback.width} x ${fallback.height} in - ${orientation} (manual)`,
+      orientation,
+      detected: false,
+    };
+  }
+
   const printWidth = zpl.match(/\^PW(\d+)/i);
   const labelLength = zpl.match(/\^LL(\d+)/i);
 
@@ -174,7 +185,7 @@ export function getLabelDimensions(
 
 function getFallbackDimensions(
   zpl: string,
-  fallback: Pick<LabelSettings, "width" | "height" | "density">
+  fallback: Pick<LabelSettings, "autoDetect" | "width" | "height" | "density">
 ): LabelDimensions {
   const inferredOrientation = getContentOrientation(zpl);
   const shortSide = Math.min(fallback.width, fallback.height);

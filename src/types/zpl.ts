@@ -8,6 +8,7 @@ export type ZplFile = {
 };
 
 export type LabelSettings = {
+  autoDetect: boolean;
   density: string;
   width: number;
   height: number;

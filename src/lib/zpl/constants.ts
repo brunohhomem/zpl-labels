@@ -14,6 +14,7 @@ export const demoZpl = `^XA
 ^XZ`;
 
 export const defaultSettings: LabelSettings = {
+  autoDetect: true,
   density: "8",
   width: 4,
   height: 6,
