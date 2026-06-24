@@ -46,12 +46,69 @@ function isDoubleLandscapeLabel(zpl: string) {
   return hasLeftColumn && hasRightColumn && maxX <= 640 && maxY <= 250;
 }
 
-function getContentOrientation(zpl: string) {
-  const coordinates = Array.from(zpl.matchAll(/\^(?:FO|FT)(\d+),(\d+)/gi));
-  if (!coordinates.length) return null;
+function getContentBounds(zpl: string) {
+  const fields = Array.from(
+    zpl.matchAll(/\^(?:FO|FT)(\d+),(\d+)([\s\S]*?)(?=\^(?:FO|FT)|\^XZ|$)/gi)
+  );
+  if (!fields.length) return null;
 
-  const maxX = Math.max(...coordinates.map((match) => Number(match[1])));
-  const maxY = Math.max(...coordinates.map((match) => Number(match[2])));
+  let maxX = 0;
+  let maxY = 0;
+
+  for (const field of fields) {
+    const x = Number(field[1]);
+    const y = Number(field[2]);
+    const commands = field[3];
+    const fieldBlock = commands.match(/\^FB(\d+)(?:,(\d+))?(?:,(\d+))?/i);
+    const font = commands.match(/\^A[^,]*,(\d+)(?:,(\d+))?/i);
+    const barcode = commands.match(/\^BC[^,]*,(\d+)/i);
+    const fontHeight = Number(font?.[1] || 0);
+    const fieldLines = Math.max(1, Number(fieldBlock?.[2] || 1));
+    const lineSpacing = Number(fieldBlock?.[3] || 0);
+    const contentWidth = Number(fieldBlock?.[1] || 0);
+    const contentHeight = Number(barcode?.[1] || 0)
+      || (fontHeight * fieldLines + lineSpacing * (fieldLines - 1));
+
+    maxX = Math.max(maxX, x + contentWidth);
+    maxY = Math.max(maxY, y + contentHeight);
+  }
+
+  return { maxX, maxY };
+}
+
+function getContentBasedDimensions(zpl: string, density: string) {
+  if (!/\^FB\d+/i.test(zpl)) return null;
+
+  const bounds = getContentBounds(zpl);
+  const dotsPerMillimeter = Number(density);
+  if (!bounds || !Number.isFinite(dotsPerMillimeter) || dotsPerMillimeter <= 0) return null;
+
+  const widthMillimeters = bounds.maxX / dotsPerMillimeter;
+  const heightMillimeters = bounds.maxY / dotsPerMillimeter;
+  if (widthMillimeters <= heightMillimeters * 1.35) return null;
+
+  const roundedWidthMillimeters = Math.ceil(widthMillimeters / 5) * 5;
+  const roundedHeightMillimeters = Math.ceil(heightMillimeters / 5) * 5;
+  if (
+    roundedWidthMillimeters > 50
+    || roundedHeightMillimeters > 30
+    || roundedWidthMillimeters < 20
+    || roundedHeightMillimeters < 10
+  ) {
+    return null;
+  }
+
+  return {
+    width: roundDimension(roundedWidthMillimeters / 25.4),
+    height: roundDimension(roundedHeightMillimeters / 25.4),
+    format: `${roundedWidthMillimeters} x ${roundedHeightMillimeters} mm - paisagem (conteudo ZPL)`,
+  };
+}
+
+function getContentOrientation(zpl: string) {
+  const bounds = getContentBounds(zpl);
+  if (!bounds) return null;
+  const { maxX, maxY } = bounds;
 
   if (maxX > maxY * 1.35) return "paisagem" as const;
   if (maxY > maxX * 1.35) return "retrato" as const;
@@ -101,6 +158,15 @@ export function getLabelDimensions(
     const orientation = width > height ? "paisagem" : "retrato";
 
     return { width, height, format: `${width} x ${height} in - ${orientation} (grafico ZPL)`, orientation, detected: true };
+  }
+
+  const contentDimensions = getContentBasedDimensions(zpl, fallback.density);
+  if (contentDimensions) {
+    return {
+      ...contentDimensions,
+      orientation: "paisagem",
+      detected: true,
+    };
   }
 
   return getFallbackDimensions(zpl, fallback);

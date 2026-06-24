@@ -101,6 +101,30 @@ describe("getLabelDimensions", () => {
       detected: true,
     });
   });
+
+  it("considera a largura de ^FB ao detectar a etiqueta QEIT76488", () => {
+    const zpl = `^XA^CI28
+^LH0,0
+^FO30,15^BY2,,0^BCN,54,N,N^FDQEIT76488^FS
+^FO105,75^A0N,20,25^FH^FDQEIT76488^FS
+^FO105,76^A0N,20,25^FH^FDQEIT76488^FS
+^FO16,115^A0N,18,18^FB300,2,2,L^FH^FDChave De Seta Uno 2003 2004 2005 At_C3_A9 2008 _2D 91458^FS
+^FO16,153^A0N,18,18^FB300,1,0,L^FH^FD^FS
+^FO15,153^A0N,18,18^FB300,1,0,L^FH^FD^FS
+^FO16,172^A0N,18,18^FH^FDSKU: F0803/FI91458
+^FS
+^XZ`;
+
+    expect(getLabelDimensions(zpl, settings)).toMatchObject({
+      width: 1.57,
+      height: 0.98,
+      orientation: "paisagem",
+      detected: true,
+    });
+    expect(getLabelDimensions(zpl, settings).format).toBe(
+      "40 x 25 mm - paisagem (conteudo ZPL)"
+    );
+  });
 });
 
 describe("splitPrintableZpl", () => {
